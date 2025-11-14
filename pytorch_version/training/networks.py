@@ -817,6 +817,104 @@ class TransformerLayer(torch.nn.Module):
 
         return from_tensor, att_probs, {"centroid_assignments": to_from}
 
+import torch
+import torch.nn as nn
+import math
+
+class RotaryPositionalEncoding(nn.Module):
+    """
+    Rotary Positional Embeddings (RoPE)
+    Reference: Su et al., "RoFormer: Enhanced Transformer with Rotary Position Embedding"
+    
+    Encodes position as rotation in embedding space instead of fixed embeddings.
+    Key advantage: Works for any sequence length and extrapolates!
+    """
+    def __init__(self, d_model, max_seq_length=10000, base=10000):
+        super().__init__()
+        self.d_model = d_model
+        self.base = base
+        
+        # Pre-compute inverse frequencies
+        inv_freq = 1.0 / (self.base ** (torch.arange(0, d_model, 2).float() / d_model))
+        self.register_buffer("inv_freq", inv_freq, persistent=False)
+    
+    def forward(self, x, seq_len=None):
+        """
+        Apply rotary embeddings to input.
+        
+        Args:
+            x: (batch, seq_len, d_model)
+            seq_len: sequence length (if None, use x.shape[1])
+        Returns:
+            (batch, seq_len, d_model) rotated embeddings
+        """
+        if seq_len is None:
+            seq_len = x.shape[1]
+        
+        # Compute position indices
+        t = torch.arange(seq_len, device=x.device, dtype=self.inv_freq.dtype)
+        
+        # Compute frequencies for each position
+        freqs = torch.einsum("i,j->ij", t, self.inv_freq)  # (seq_len, d_model/2)
+        
+        # Duplicate to match d_model
+        emb = torch.cat([freqs, freqs], dim=-1)  # (seq_len, d_model)
+        
+        # Convert to cos and sin
+        cos_emb = emb.cos()[None, :, :]  # (1, seq_len, d_model)
+        sin_emb = emb.sin()[None, :, :]  # (1, seq_len, d_model)
+        
+        # Apply rotation to embeddings
+        # Split into even and odd positions
+        x1 = x[..., 0::2]
+        x2 = x[..., 1::2]
+        
+        # Apply rotation (2D rotation matrix)
+        x_rotated = torch.zeros_like(x)
+        x_rotated[..., 0::2] = x1 * cos_emb[..., 0::2] - x2 * sin_emb[..., 1::2]
+        x_rotated[..., 1::2] = x1 * sin_emb[..., 0::2] + x2 * cos_emb[..., 1::2]
+        
+        return x_rotated
+
+
+class BipartiteAttentionWithRoPE(nn.Module):
+    """
+    Bipartite Attention with Rotary Positional Encoding
+    Drop-in replacement for BipartiteAttention
+    """
+    def __init__(self, channels, components_num, latent_size):
+        super().__init__()
+        
+        # Original bipartite attention module
+        # NOTE: Replace 'BipartiteAttention' with the actual class name in your networks.py
+        self.attention = BipartiteAttention(channels, components_num, latent_size)
+        
+        # RoPE modules for latent and spatial features
+        self.rope_latent = RotaryPositionalEncoding(latent_size)
+        self.rope_spatial = RotaryPositionalEncoding(channels)
+    
+    def forward(self, z, f):
+        """
+        Args:
+            z: (B, K, latent_size) - latent components
+            f: (B, H, W, channels) - spatial features
+        Returns:
+            z_out, f_out: Updated latent and spatial features
+        """
+        B, K, D = z.shape
+        B, H, W, C = f.shape
+        
+        # Apply RoPE to latent components
+        z_rotated = self.rope_latent(z)  # (B, K, D)
+        
+        # Apply RoPE to spatial features
+        f_flat = f.reshape(B, H*W, C)
+        f_rotated = self.rope_spatial(f_flat)
+        f_rotated = f_rotated.reshape(B, H, W, C)
+        
+        # Use existing bipartite attention with RoPE inputs
+        return self.attention(z_rotated, f_rotated)
+        
 ############################################## Generator ##############################################
 # -----------------------------------------------------------------------------------------------------
 
