@@ -877,6 +877,28 @@ class RotaryPositionalEncoding(nn.Module):
         return x_rotated
 
 
+class SpecNormAttention(nn.Module):
+    """
+    Spectral Normalization for Attention
+    Prevents attention eigenvalues from growing too large
+    """
+    
+    def __init__(self, channels, components_num, latent_size):
+        super().__init__()
+        self.attention = BipartiteAttention(channels, components_num, latent_size)
+        self.spec_norm_fn = torch.nn.utils.spectral_norm
+    
+    def apply_spectral_norm(self):
+        """Apply spectral norm to attention weight matrices"""
+        for module in self.attention.modules():
+            if hasattr(module, 'weight') and module.weight.dim() > 1:
+                module = self.spec_norm_fn(module)
+    
+    def forward(self, z, f):
+        return self.attention(z, f)
+
+
+
 class BipartiteAttentionWithRoPE(nn.Module):
     """
     Bipartite Attention with Rotary Positional Encoding
