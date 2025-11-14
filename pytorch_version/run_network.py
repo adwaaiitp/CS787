@@ -453,6 +453,16 @@ def main():
     parser.add_argument("--mirror-augment",     help = "Perform horizontal flip augmentation for the data (default: %(default)s)", default = None, action = "store_true")
     parser.add_argument("--train-images-num",   help = "Maximum number of images to train on. If not specified, train on the whole dataset.", default = None, type = int)
 
+    parser.add_argument("--use-rope", 
+    help="Use Rotary Positional Encoding in attention (default: False)",
+    default=False, 
+    action="store_true")
+
+    if args.use_rope:
+        G_kwargs.transformer_args.attention_type = 'BipartiteAttentionWithRoPE'
+    else:
+        G_kwargs.transformer_args.attention_type = 'BipartiteAttention'
+
     ## CUDA
     # parser.add_argument("--fp16",             help = "Enable mixed-precision training", default = False, action = "store_true")
     # parser.add_argument("--nhwc",             help = "Use NHWC memory format with FP16", default = False, action = "store_true")
