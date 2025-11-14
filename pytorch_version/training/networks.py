@@ -899,6 +899,52 @@ class SpecNormAttention(nn.Module):
 
 
 
+class AdaptiveAttentionGating(nn.Module):
+    """
+    Adaptive gating for attention heads
+    Learn importance of each head dynamically
+    """
+    
+    def __init__(self, channels, num_heads=8):
+        super().__init__()
+        self.num_heads = num_heads
+        self.gate_network = nn.Sequential(
+            nn.Conv2d(channels, channels // 4, 1),
+            nn.ReLU(),
+            nn.Conv2d(channels // 4, num_heads, 1),
+            nn.Sigmoid()
+        )
+    
+    def forward(self, attention_output, feature_map):
+        """
+        attention_output: (B, H, W, C) - output from multi-head attention
+        feature_map: (B, H, W, C) - original features for gating
+        
+        Returns: gated attention output
+        """
+        # Compute importance gates
+        gates = self.gate_network(feature_map.permute(0, 3, 1, 2))  # (B, num_heads, H, W)
+        gates = gates.permute(0, 2, 3, 1)  # (B, H, W, num_heads)
+        
+        # Average gates across heads and apply
+        gate_weights = gates.mean(-1, keepdim=True)  # (B, H, W, 1)
+        
+        return attention_output * gate_weights
+
+
+# Integrate into existing attention
+class GatedBipartiteAttention(nn.Module):
+    def __init__(self, channels, components_num, latent_size, num_heads=8):
+        super().__init__()
+        self.attention = BipartiteAttention(channels, components_num, latent_size)
+        self.gating = AdaptiveAttentionGating(channels, num_heads)
+    
+    def forward(self, z, f):
+        z_out, f_out = self.attention(z, f)
+        f_out_gated = self.gating(f_out, f)
+        return z_out, f_out_gated
+
+
 class BipartiteAttentionWithRoPE(nn.Module):
     """
     Bipartite Attention with Rotary Positional Encoding
