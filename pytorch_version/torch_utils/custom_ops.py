@@ -55,6 +55,15 @@ def get_plugin(module_name, sources, **build_kwargs):
             if compiler_bindir is None:
                 raise RuntimeError(f'Could not find MSVC/GCC/CLANG installation on this computer. Check _find_compiler_bindir() in "{__file__}".')
             os.environ['PATH'] += ';' + compiler_bindir
+        if 'extra_cuda_cflags' in build_kwargs:
+            build_kwargs['extra_cuda_cflags'].append('-allow-unsupported-compiler')
+        else:
+            build_kwargs['extra_cuda_cflags'] = ['-allow-unsupported-compiler']
+        # ADD THIS: Force allow unsupported compiler for CUDA 11.7 + VS 2022
+        if 'extra_cuda_cflags' in build_kwargs:
+            build_kwargs['extra_cuda_cflags'].append('-allow-unsupported-compiler')
+        else:
+            build_kwargs['extra_cuda_cflags'] = ['-allow-unsupported-compiler']
 
         # Compile and load.
         verbose_build = (verbosity == 'full')
