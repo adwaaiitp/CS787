@@ -1214,7 +1214,7 @@ class MappingNetwork(torch.nn.Module):
             self.register_buffer("w_avg", torch.zeros([w_dim]))
 
         # GANformer-related setup
-        self.transformer = transformer
+        self.transformer = SelfAttentionWrapper(channels=channels, components_num=8, latent_size=128, num_heads=8, dropout=0.0 )
 
     def forward(self, z, c, pos = None, mask = None, truncation_psi = 1, truncation_cutoff = None, skip_w_avg_update = False):
         # Embed, normalize, and concatenate inputs
