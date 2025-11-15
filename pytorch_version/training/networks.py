@@ -109,6 +109,171 @@ def get_global(ws):
 def get_components(ws): 
     return ws[:, :-1]    
 
+# ============================================================================
+# Self-Attention (X-X) Implementation
+# Complete replacement for BipartiteAttention
+# ============================================================================
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import math
+
+
+class SelfAttention(nn.Module):
+    """
+    Pure Self-Attention on spatial features (X-X attention)
+    Replaces bipartite attention (Z-X, X-Z)
+    
+    Key differences from BipartiteAttention:
+    - No latent components (no Z)
+    - Only spatial self-attention (X attends to X)
+    - Standard multi-head self-attention
+    """
+    
+    def __init__(self, channels, num_heads=8, dropout=0.0):
+        """
+        Args:
+            channels: Number of feature channels
+            num_heads: Number of attention heads
+            dropout: Dropout probability
+        """
+        super().__init__()
+        
+        assert channels % num_heads == 0, f"channels ({channels}) must be divisible by num_heads ({num_heads})"
+        
+        self.channels = channels
+        self.num_heads = num_heads
+        self.head_dim = channels // num_heads
+        self.scale = self.head_dim ** -0.5
+        
+        # Q, K, V projections for spatial features
+        self.qkv = nn.Linear(channels, channels * 3, bias=False)
+        
+        # Output projection
+        self.proj_out = nn.Linear(channels, channels)
+        
+        # Dropout
+        self.dropout = nn.Dropout(dropout)
+        
+        # Layer normalization
+        self.norm = nn.LayerNorm(channels)
+    
+    def forward(self, x):
+        """
+        Args:
+            x: (B, H, W, C) - spatial features
+            
+        Returns:
+            x_out: (B, H, W, C) - attention output
+        """
+        B, H, W, C = x.shape
+        
+        # Reshape to sequence: (B, H*W, C)
+        x_flat = x.reshape(B, H * W, C)
+        
+        # Apply layer norm
+        x_norm = self.norm(x_flat)
+        
+        # Compute Q, K, V
+        qkv = self.qkv(x_norm)  # (B, H*W, 3*C)
+        qkv = qkv.reshape(B, H * W, 3, self.num_heads, self.head_dim)
+        qkv = qkv.permute(2, 0, 3, 1, 4)  # (3, B, num_heads, H*W, head_dim)
+        q, k, v = qkv[0], qkv[1], qkv[2]
+        
+        # Compute attention scores: Q @ K^T
+        attn = (q @ k.transpose(-2, -1)) * self.scale  # (B, num_heads, H*W, H*W)
+        attn = F.softmax(attn, dim=-1)
+        attn = self.dropout(attn)
+        
+        # Apply attention to values
+        x_attn = (attn @ v)  # (B, num_heads, H*W, head_dim)
+        x_attn = x_attn.transpose(1, 2).reshape(B, H * W, C)  # (B, H*W, C)
+        
+        # Output projection
+        x_out = self.proj_out(x_attn)
+        x_out = self.dropout(x_out)
+        
+        # Residual connection
+        x_out = x_flat + x_out
+        
+        # Reshape back to spatial: (B, H, W, C)
+        x_out = x_out.reshape(B, H, W, C)
+        
+        return x_out
+
+
+class SelfAttentionWrapper(nn.Module):
+    """
+    Wrapper to maintain compatibility with BipartiteAttention interface
+    
+    BipartiteAttention signature: forward(z, f) -> (z_out, f_out)
+    SelfAttention signature: forward(f) -> f_out
+    
+    This wrapper:
+    - Ignores the latent component z
+    - Passes it through unchanged
+    - Only applies self-attention to spatial features f
+    """
+    
+    def __init__(self, channels, components_num=None, latent_size=None, num_heads=8, dropout=0.0):
+        """
+        Args:
+            channels: Number of feature channels
+            components_num: Ignored (for compatibility)
+            latent_size: Ignored (for compatibility)
+            num_heads: Number of attention heads
+            dropout: Dropout probability
+        """
+        super().__init__()
+        
+        # Only need self-attention on spatial features
+        self.self_attention = SelfAttention(channels, num_heads, dropout)
+        
+        # Store for reference (not used)
+        self.channels = channels
+        self.components_num = components_num
+        self.latent_size = latent_size
+    
+    def forward(self, z, f):
+        """
+        Args:
+            z: (B, K, latent_size) - latent components (IGNORED - passed through)
+            f: (B, H, W, channels) - spatial features
+            
+        Returns:
+            z: (B, K, latent_size) - unchanged latent (passed through)
+            f_out: (B, H, W, channels) - self-attention output
+        """
+        # Apply self-attention to spatial features only
+        f_out = self.self_attention(f)
+        
+        # Return unchanged z and updated f
+        return z, f_out
+
+
+class SelfAttentionNoLatent(nn.Module):
+    """
+    Self-Attention WITHOUT latent components
+    
+    Use this if you want to completely remove latent components from the architecture.
+    This only takes spatial features as input.
+    """
+    
+    def __init__(self, channels, num_heads=8, dropout=0.0):
+        super().__init__()
+        self.self_attention = SelfAttention(channels, num_heads, dropout)
+    
+    def forward(self, f):
+        """
+        Args:
+            f: (B, H, W, channels) - spatial features
+            
+        Returns:
+            f_out: (B, H, W, channels) - self-attention output
+        """
+        return self.self_attention(f)
+        
 # Bias-Activation layer act(x + b)
 @persistence.persistent_class
 class BiasActLayer(torch.nn.Module):
